@@ -1,0 +1,133 @@
+version: "3.8"
+
+services:
+  # ── Redis (Event Bus fallback + Shared State Cache + Task Market) ──
+  redis:
+    image: redis:7-alpine
+    container_name: aasc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    command: redis-server --appendonly yes
+
+  # ── PostgreSQL (Shared Memory + Failure Memory + Software Genomes) ──
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aasc-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_civilization
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./backend/config/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── ZooKeeper (required by Kafka) ──
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: aasc-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  # ── Kafka (Event Bus primary transport) ──
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: aasc-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  # ── Prometheus (Metrics Collection for Digital Twin) ──
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aasc-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
+  # ── Grafana (Visualization Dashboard) ──
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aasc-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=civilization
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+  # ── Neo4j (Knowledge Graph for Long-term Memory) ──
+  neo4j:
+    image: neo4j:latest
+    container_name: aasc-neo4j
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      NEO4J_AUTH: neo4j/civilization
+      NEO4J_dbms_memory_pagecache_size: 512M
+    volumes:
+      - neo4j-data:/data
+
+  # ── Command Center (FastAPI + WebSocket) ──
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aasc-api
+    ports:
+      - "8000:8000"    # REST API
+      - "8765:8765"    # WebSocket
+      - "9091:9091"    # Prometheus metrics
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/ai_civilization
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: python -m uvicorn backend.web.app:create_app --host 0.0.0.0 --port 8000 --reload --factory
+
+volumes:
+  redis-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+  neo4j-data:

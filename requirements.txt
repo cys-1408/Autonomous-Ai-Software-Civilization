@@ -1,0 +1,41 @@
+# Core
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# Event Bus - Kafka
+confluent-kafka==2.5.0
+aiokafka==0.11.0
+
+# Fast Messaging - Redis
+redis[hiredis]==5.1.0
+aiohttp==3.10.5
+
+# Agent-to-Agent - gRPC
+grpcio==1.66.1
+grpcio-tools==1.66.1
+protobuf==5.28.1
+
+# Database
+asyncpg==0.29.0
+sqlalchemy[asyncio]==2.0.35
+pgvector==0.3.5
+neo4j==5.25.0
+
+# Real-time Dashboard - WebSockets
+websockets==13.0.1
+socketio[asyncio_server]==5.11.2
+
+# Metrics - Prometheus
+prometheus-client==0.21.0
+
+# WebSocket Server
+websockets==13.0.1
+
+# Utilities
+python-dotenv==1.0.1
+structlog==24.4.0
+orjson==3.10.7
+uuid6==2024.7.10
+tenacity==9.0.0
