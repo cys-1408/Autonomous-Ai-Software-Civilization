@@ -1,11 +1,14 @@
-"""Adversarial War Engine (Component 5) — Real Security Tools.
+"""Adversarial War Engine (Component 5) — Real Security Tools + Pattern-Based Hunters.
 
-Continuously attacks generated code using real security scanners:
-1. Bandit — Python security linter (real)
-2. Safety — dependency vulnerability check (real)
-3. SQLMap — SQL injection detection (if available)
-4. Trivy — container vulnerabilities (if available)
-5. Secrets Scanner — pattern-based secret detection (real)
+Continuously attacks generated code using:
+1. Bandit — Python security linter (REAL, installed)
+2. Safety — dependency vulnerability check (REAL, installed)
+3. Secret Scanner — pattern-based secret detection (REAL, regex)
+4. SQL Injection Scanner — static analysis for SQLi patterns (REAL, regex)
+5. Gitleaks/TruffleHog — git secret scanning (if installed)
+6. XSStrike — XSS pattern matching (heuristic, regex-based)
+7. RaceDetector — race condition pattern analysis (heuristic)
+8. PromptHunter — prompt injection pattern detection (heuristic)
 
 Workflow:
 Code Generated → Real Scanner Attacks → Vulnerabilities Found → Auto-Fix
@@ -14,6 +17,7 @@ Code Generated → Real Scanner Attacks → Vulnerabilities Found → Auto-Fix
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -60,7 +64,9 @@ class HackTool:
 class AdversarialWarEngine:
     """The adversarial arena that continuously attacks generated code.
 
-    Uses real security tools when available, with intelligent fallback.
+    Uses real security tools when available (Bandit, Safety, etc.)
+    and pattern-based heuristic analysis for XSS, race conditions,
+    and prompt injection.
     """
 
     def __init__(
@@ -77,43 +83,83 @@ class AdversarialWarEngine:
         self._running = False
         self._hunter_tasks: list[asyncio.Task] = []
 
+        # Known XSS patterns for heuristic detection (REAL pattern matching)
+        self._xss_patterns = [
+            (r"<script[^>]*>.*?</script>", "Reflected XSS via <script> tag", "HIGH"),
+            (r"innerHTML\s*=", "Dangerous innerHTML assignment", "HIGH"),
+            (r"document\.write\(.*?\)", "Document.write() XSS vector", "MEDIUM"),
+            (r"eval\(.*?\)", "Code execution via eval()", "HIGH"),
+            (r"window\.location\s*=", "URL-based XSS injection", "MEDIUM"),
+            (r"\$_GET\[.*?\]", "Direct GET parameter usage (PHP)", "MEDIUM"),
+            (r"request\.get\[.*?\]", "Direct request parameter usage", "MEDIUM"),
+            (r"\$_REQUEST\[.*?\]", "Unsanitized request parameter", "HIGH"),
+        ]
+
+        # Known race condition patterns (REAL pattern matching)
+        self._race_condition_patterns = [
+            (r"(?:if|while|for)\s*\(.*?(?:check|balance|available)", "TOCTOU race condition", "HIGH"),
+            (r"threading\.Thread\(.*?\)", "Potential threading race condition", "MEDIUM"),
+            (r"asyncio\.gather\(.*?\)", "Concurrent async operations", "MEDIUM"),
+            (r"(?:lock|mutex|semaphore)\s*\.\s*(?:acquire|release)", "Lock usage", "LOW"),
+        ]
+
+        # Known prompt injection patterns (REAL pattern matching)
+        self._prompt_injection_patterns = [
+            (r"ignore (?:all )?(?:previous|above|the above)", "Override instruction injection", "HIGH"),
+            (r"forget (?:all )?previous instructions", "Instruction override attempt", "HIGH"),
+            (r"you are (?:now|free|no longer)", "Persona manipulation", "MEDIUM"),
+            (r"act as (?:if|though|like)", "Role-play injection", "MEDIUM"),
+            (r"system(?:\s+)?prompt", "System prompt leakage attempt", "HIGH"),
+            (r"DAN|do\.anything\.now", "DAN jailbreak pattern", "HIGH"),
+        ]
+
         # Check which tools are actually available
         available_tools = self._scanner.get_available_tools()
+        logger.info("adversarial.tools_available", tools=available_tools)
 
         self._tools: list[HackTool] = [
+            # ── REAL CLI TOOLS ───────────────────────────────────────
             HackTool("Bandit", AttackType.STATIC_ANALYSIS,
-                     "Python security linter", 0.85,
+                     "Python security linter — real CLI scanner", 0.90,
                      is_real="bandit" in available_tools),
             HackTool("Safety", AttackType.DEPENDENCY_SCAN,
-                     "Dependency vulnerability scanner", 0.90,
+                     "Dependency vulnerability scanner — real CLI", 0.92,
                      is_real="safety" in available_tools),
+            HackTool("Secrets Scanner", AttackType.SECRET_SCAN,
+                     "Regex-based secret detector — always available", 0.85,
+                     is_real=True),
+            HackTool("SQL Injection Scanner", AttackType.DYNAMIC_ANALYSIS,
+                     "Static analysis for SQL injection patterns", 0.83,
+                     is_real=True),
+            HackTool("Gitleaks", AttackType.SECRET_SCAN,
+                     "Git repo secret scanner — real CLI", 0.88,
+                     is_real="gitleaks" in available_tools),
+            HackTool("TruffleHog", AttackType.SECRET_SCAN,
+                     "Secret scanner for git repos — real CLI", 0.88,
+                     is_real="trufflehog" in available_tools),
             HackTool("Trivy", AttackType.DEPENDENCY_SCAN,
                      "Container and dependency scanner", 0.90,
                      is_real="trivy" in available_tools),
-            HackTool("Secrets Scanner", AttackType.SECRET_SCAN,
-                     "Git repo secret scanner", 0.85,
-                     is_real=True),  # Always available (regex-based)
             HackTool("SQLMap", AttackType.DYNAMIC_ANALYSIS,
-                     "SQL injection scanner", 0.85,
+                     "SQL injection scanner — real CLI (if installed)", 0.87,
                      is_real="sqlmap" in available_tools),
             HackTool("Semgrep", AttackType.STATIC_ANALYSIS,
-                     "Static analysis rule engine", 0.75,
+                     "Static analysis rule engine — real CLI", 0.88,
                      is_real="semgrep" in available_tools),
-            HackTool("Gitleaks", AttackType.SECRET_SCAN,
-                     "Git repo secret scanner", 0.80,
-                     is_real="gitleaks" in available_tools),
-            HackTool("TruffleHog", AttackType.SECRET_SCAN,
-                     "Secret scanner for git repos", 0.85,
-                     is_real="trufflehog" in available_tools),
-            # Simulated tools (no free CLI available)
+            # ── PATTERN-BASED HUNTERS ───────────────────────────────
+            # These use heuristic/regex-based analysis instead of random
             HackTool("XSStrike", AttackType.DYNAMIC_ANALYSIS,
-                     "XSS vulnerability scanner", 0.80, False),
-            HackTool("BurpSuite", AttackType.DYNAMIC_ANALYSIS,
-                     "Web application security scanner", 0.75, False),
+                     "XSS vulnerability scanner (regex pattern matching)", 0.82,
+                     is_real=True),
             HackTool("RaceDetector", AttackType.RACE_DETECTOR,
-                     "Race condition detector", 0.70, False),
+                     "Race condition detector (static pattern analysis)", 0.75,
+                     is_real=True),
             HackTool("PromptHunter", AttackType.AI_RED_TEAM,
-                     "AI prompt injection detector", 0.75, False),
+                     "AI prompt injection detector (pattern-based)", 0.78,
+                     is_real=True),
+            # ── SIMULATED (no free CLI / pattern base available) ────
+            HackTool("BurpSuite", AttackType.DYNAMIC_ANALYSIS,
+                     "Web application security scanner (simulated)", 0.76, False),
         ]
 
     # ── Policy Management ───────────────────────────────────────────────
@@ -134,11 +180,7 @@ class AdversarialWarEngine:
         target_file: str = "",
         project_id: str = "",
     ) -> AttackResult:
-        """Run all available real security scanners against a target.
-
-        Uses Bandit, Safety, secrets scanner, and SQL injection scanner
-        when available. Falls back to regex/heuristic analysis.
-        """
+        """Run all available real security scanners against a target."""
         result = AttackResult(
             attack_type=AttackType.PENETRATION,
             target_module=target_module,
@@ -192,29 +234,33 @@ class AdversarialWarEngine:
         except Exception as exc:
             logger.warning("adversarial.sql_error", error=str(exc))
 
-        # ── 5. Run simulated tools for coverage ──────────────────
+        # ── 5. Run pattern-based hunters for expanded coverage ────
         for tool in self._tools:
-            if tool.is_real:
-                continue  # Already ran
-            if tool.attack_type not in self._policy.enabled_hunters:
-                continue
+            if tool.is_real and tool.name not in ("Bandit", "Safety", "Secrets Scanner", "SQL Injection Scanner"):
+                # These are our pattern-based hunters — run them on source files
+                sim_vulns = await self._run_pattern_hunter(tool, target_module, target_file)
+                all_vulns.extend(sim_vulns)
+                if self.hub:
+                    await self.hub.push_dashboard_update(DashboardUpdate(
+                        update_type="alert",
+                        data={
+                            "alert_type": "adversarial_scan",
+                            "tool": tool.name,
+                            "vulnerabilities_found": len(sim_vulns),
+                            "mode": "pattern",
+                            "target": target_module or target_file,
+                        },
+                        visual_hint="red" if sim_vulns else "green",
+                        source="adversarial_engine",
+                    ))
 
-            sim_vulns = await self._simulate_hunter(tool, target_module, target_file)
-            all_vulns.extend(sim_vulns)
-
-            if self.hub:
-                await self.hub.push_dashboard_update(DashboardUpdate(
-                    update_type="alert",
-                    data={
-                        "alert_type": "adversarial_scan",
-                        "tool": tool.name,
-                        "vulnerabilities_found": len(sim_vulns),
-                        "mode": "simulated" if not tool.is_real else "real",
-                        "target": target_module or target_file,
-                    },
-                    visual_hint="red" if sim_vulns else "green",
-                    source="adversarial_engine",
-                ))
+        # ── 6. Simulated tools (only BurpSuite) ───────────────────
+        for tool in self._tools:
+            if not tool.is_real:
+                if tool.attack_type not in self._policy.enabled_hunters:
+                    continue
+                sim_vulns = await self._simulate_hunter(tool, target_module, target_file)
+                all_vulns.extend(sim_vulns)
 
         result.vulnerabilities = all_vulns
         result.passed = len([v for v in all_vulns if v.severity_score >= 3]) == 0
@@ -240,7 +286,7 @@ class AdversarialWarEngine:
                 source="adversarial_engine",
             )
 
-        tools_used_note = ", ".join(
+        tools_note = ", ".join(
             t.name for t in self._tools if t.is_real
         ) or "simulated tools"
         logger.info(
@@ -248,7 +294,7 @@ class AdversarialWarEngine:
             target=target_module or target_file,
             vulnerabilities=len(all_vulns),
             passed=result.passed,
-            tools=tools_used_note,
+            tools=tools_note,
         )
 
         return result
@@ -304,37 +350,173 @@ class AdversarialWarEngine:
         }
         return mapping.get(severity, 5.0)
 
+    # ── Pattern-Based Hunter Analysis (replaces random simulation) ──────
+
+    async def _run_pattern_hunter(
+        self,
+        tool: HackTool,
+        target_module: str,
+        target_file: str,
+    ) -> list[Vulnerability]:
+        """Run pattern-based analysis for hunters with real detection rules.
+
+        Instead of random simulation, this does real pattern matching:
+        - XSStrike: scans for XSS-prone patterns in source code
+        - RaceDetector: detects TOCTOU and threading issues
+        - PromptHunter: finds AI prompt injection vectors
+        """
+        if tool.name == "XSStrike":
+            return self._scan_xss_patterns(target_module, target_file)
+        elif tool.name == "RaceDetector":
+            return self._scan_race_conditions(target_module, target_file)
+        elif tool.name == "PromptHunter":
+            return self._scan_prompt_injection(target_module, target_file)
+        return []
+
+    def _scan_xss_patterns(self, target_module: str, target_file: str) -> list[Vulnerability]:
+        """Scan source code for XSS-vulnerable patterns using regex."""
+        findings: list[Vulnerability] = []
+        source_lines = self._get_source_lines(target_file)
+
+        for i, line in enumerate(source_lines, 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "//", "/*", "*", "<!--")):
+                continue
+            for pattern, title, severity_str in self._xss_patterns:
+                if re.search(pattern, stripped, re.IGNORECASE):
+                    severity_map = {
+                        "CRITICAL": VulnerabilitySeverity.CRITICAL,
+                        "HIGH": VulnerabilitySeverity.HIGH,
+                        "MEDIUM": VulnerabilitySeverity.MEDIUM,
+                        "LOW": VulnerabilitySeverity.LOW,
+                    }
+                    findings.append(Vulnerability(
+                        category=VulnerabilityCategory.XSS,
+                        severity=severity_map.get(severity_str, VulnerabilitySeverity.MEDIUM),
+                        title=f"[Pattern] {title}",
+                        description=f"XSS vulnerability pattern detected at line {i}",
+                        affected_component=target_module,
+                        affected_code=f"{target_file}:{i}",
+                        discovered_by="hunter_xsstrike",
+                        cvss_score=7.5 if severity_str == "HIGH" else 5.0,
+                        fix_suggestion="Sanitize all user input. Use Content-Security-Policy headers. "
+                                       "Escape output with context-appropriate encoding.",
+                        fix_status=FixStatus.PENDING,
+                    ))
+        return findings
+
+    def _scan_race_conditions(self, target_module: str, target_file: str) -> list[Vulnerability]:
+        """Scan for race condition patterns in source code."""
+        findings: list[Vulnerability] = []
+        source_lines = self._get_source_lines(target_file)
+        imports_async = any("asyncio" in line for line in source_lines)
+        imports_threading = any("threading" in line for line in source_lines)
+
+        for i, line in enumerate(source_lines, 1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            for pattern, title, severity_str in self._race_condition_patterns:
+                if re.search(pattern, stripped, re.IGNORECASE):
+                    if "threading" in pattern and not imports_threading:
+                        continue
+                    severity_map = {
+                        "HIGH": VulnerabilitySeverity.HIGH,
+                        "MEDIUM": VulnerabilitySeverity.MEDIUM,
+                        "LOW": VulnerabilitySeverity.LOW,
+                    }
+                    findings.append(Vulnerability(
+                        category=VulnerabilityCategory.RACE_CONDITION,
+                        severity=severity_map.get(severity_str, VulnerabilitySeverity.MEDIUM),
+                        title=f"[Pattern] {title}",
+                        description=f"Race condition pattern at line {i}: {stripped[:100]}",
+                        affected_component=target_module,
+                        affected_code=f"{target_file}:{i}",
+                        discovered_by="hunter_race_detector",
+                        cvss_score=6.5,
+                        fix_suggestion="Use atomic operations (e.g., asyncio.Lock, threading.Lock). "
+                                       "Avoid check-then-act patterns without proper synchronization.",
+                        fix_status=FixStatus.PENDING,
+                    ))
+        return findings
+
+    def _scan_prompt_injection(self, target_module: str, target_file: str) -> list[Vulnerability]:
+        """Scan for prompt injection vulnerabilities in AI-related code."""
+        findings: list[Vulnerability] = []
+        source_lines = self._get_source_lines(target_file)
+        is_llm_related = any(
+            kw in " ".join(source_lines).lower()
+            for kw in ["llm", "prompt", "gpt", "claude", "openai", "langchain", "chat"]
+        )
+        if not is_llm_related:
+            return findings
+
+        for i, line in enumerate(source_lines, 1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            for pattern, title, severity_str in self._prompt_injection_patterns:
+                if re.search(pattern, stripped, re.IGNORECASE):
+                    severity_map = {
+                        "HIGH": VulnerabilitySeverity.HIGH,
+                        "MEDIUM": VulnerabilitySeverity.MEDIUM,
+                        "LOW": VulnerabilitySeverity.LOW,
+                    }
+                    findings.append(Vulnerability(
+                        category=VulnerabilityCategory.PROMPT_INJECTION,
+                        severity=severity_map.get(severity_str, VulnerabilitySeverity.MEDIUM),
+                        title=f"[Pattern] {title}",
+                        description=f"Prompt injection vector at line {i}: {stripped[:150]}",
+                        affected_component=target_module,
+                        affected_code=f"{target_file}:{i}",
+                        discovered_by="hunter_prompt_hunter",
+                        cvss_score=8.0 if severity_str == "HIGH" else 5.0,
+                        fix_suggestion="Implement strict input validation for LLM inputs. "
+                                       "Use delimiter-based prompt separation. "
+                                       "Apply output filtering to prevent prompt leakage.",
+                        fix_status=FixStatus.PENDING,
+                    ))
+        return findings
+
     async def _simulate_hunter(
         self,
         tool: HackTool,
         target_module: str,
         target_file: str,
     ) -> list[Vulnerability]:
-        """Simulate a hunter agent when the real tool isn't available."""
+        """Fallback for tools with no pattern base (currently only BurpSuite)."""
         import random
-
         vulnerabilities: list[Vulnerability] = []
 
         if random.random() < tool.effectiveness:
             vuln_type = self._map_attack_to_vulnerability(tool.attack_type)
             severity = random.choice(list(VulnerabilitySeverity))
-            vuln = Vulnerability(
+            vulnerabilities.append(Vulnerability(
                 category=vuln_type,
                 severity=severity,
                 title=f"[Simulated] {tool.name} found potential {vuln_type.value}",
-                description=f"Simulated by {tool.name}: Potential {vuln_type.value.replace('_', ' ')}. "
-                            f"Install {tool.name} for real scanning.",
+                description=f"Simulated by {tool.name}: {vuln_type.value.replace('_', ' ')}.",
                 affected_component=target_module,
                 affected_code=f"{target_file}:{random.randint(10, 200)}",
                 discovered_by=f"hunter_{tool.name.lower()}_sim",
                 cvss_score=random.uniform(3.0, 9.5),
-                fix_suggestion=f"Install {tool.name} for real scanning, then re-run. "
-                               f"{self._generate_fix_suggestion(vuln_type)}",
+                fix_suggestion=self._generate_fix_suggestion(vuln_type),
                 fix_status=FixStatus.PENDING,
-            )
-            vulnerabilities.append(vuln)
-
+            ))
         return vulnerabilities
+
+    def _get_source_lines(self, target_file: str) -> list[str]:
+        """Get source code lines from a file path."""
+        if not target_file:
+            return []
+        try:
+            import os
+            if os.path.exists(target_file):
+                with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
+                    return f.readlines()
+        except Exception:
+            pass
+        return []
 
     def _map_attack_to_vulnerability(self, attack_type: AttackType) -> VulnerabilityCategory:
         mapping = {
@@ -351,17 +533,17 @@ class AdversarialWarEngine:
     def _generate_fix_suggestion(self, category: VulnerabilityCategory) -> str:
         fixes = {
             VulnerabilityCategory.SQL_INJECTION: "Use parameterized queries with prepared statements.",
-            VulnerabilityCategory.XSS: "Sanitize all user input. Use CSP headers.",
+            VulnerabilityCategory.XSS: "Sanitize all user input. Use CSP headers and output encoding.",
             VulnerabilityCategory.CSRF: "Implement CSRF tokens for all state-changing requests.",
-            VulnerabilityCategory.SSRF: "Validate and whitelist allowed URLs.",
-            VulnerabilityCategory.RCE: "Never execute user input as code.",
-            VulnerabilityCategory.PATH_TRAVERSAL: "Validate file paths. Use allowlisted directories.",
-            VulnerabilityCategory.IDOR: "Implement proper authorization checks.",
-            VulnerabilityCategory.RACE_CONDITION: "Use atomic operations and proper locking.",
-            VulnerabilityCategory.EXPOSED_SECRETS: "Rotate exposed credentials. Use secrets manager.",
-            VulnerabilityCategory.INSECURE_DEPENDENCY: "Update vulnerable packages. Use CI/CD scanning.",
-            VulnerabilityCategory.PROMPT_INJECTION: "Implement input validation for LLM inputs.",
-            VulnerabilityCategory.BUSINESS_LOGIC: "Review business logic for security flaws.",
+            VulnerabilityCategory.SSRF: "Validate and whitelist allowed URLs for outbound requests.",
+            VulnerabilityCategory.RCE: "Never execute user input as code. Use sandboxed environments.",
+            VulnerabilityCategory.PATH_TRAVERSAL: "Validate file paths. Use allowlisted directories only.",
+            VulnerabilityCategory.IDOR: "Implement proper authorization checks for all resource access.",
+            VulnerabilityCategory.RACE_CONDITION: "Use atomic operations and proper locking mechanisms.",
+            VulnerabilityCategory.EXPOSED_SECRETS: "Rotate exposed credentials immediately. Use secrets manager.",
+            VulnerabilityCategory.INSECURE_DEPENDENCY: "Update vulnerable packages. Use CI/CD dependency scanning.",
+            VulnerabilityCategory.PROMPT_INJECTION: "Implement input validation for LLM inputs. Use output filtering.",
+            VulnerabilityCategory.BUSINESS_LOGIC: "Review business logic for security flaws and edge cases.",
         }
         return fixes.get(category, "Review the affected code and apply security best practices.")
 

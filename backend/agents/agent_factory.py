@@ -362,14 +362,191 @@ class AgentFactory:
         logger.info("factory.stopped")
 
     async def _monitor_loop(self) -> None:
-        """Periodically check for skills gaps and spawn agents."""
+        """Periodically check for skills gaps and spawn agents.
+
+        Every 60 seconds:
+        1. Scan the task market for unassigned/open tasks
+        2. Detect missing specializations
+        3. Auto-spawn specialist agents to fill gaps
+        4. Log evolution events
+        """
         while self._running:
             try:
-                # In a full implementation, this would check the task
-                # market for unassigned tasks and spawn agents as needed
+                if not self.hub:
+                    await asyncio.sleep(10)
+                    continue
+
+                # 1. Collect unassigned tasks from the task market
+                unassigned_tasks = self._collect_unassigned_tasks()
+
+                # 2. Detect skills gaps
+                gaps = self.detect_skills_gap(unassigned_tasks)
+
+                # 3. Auto-spawn agents for detected gaps
+                if gaps:
+                    spawned = await self.auto_spawn_for_gaps(unassigned_tasks)
+                    if spawned:
+                        logger.info(
+                            "factory.evolution_event",
+                            gaps_detected=gaps,
+                            agents_spawned=len(spawned),
+                        )
+                        # Register new agents in the economy
+                        if self.hub:
+                            for agent in spawned:
+                                await agent.start(hub=self.hub)
+                                # Notify the civilization
+                                await self.hub.publish_event(
+                                    EventType.AGENT_SPAWNED,
+                                    payload={
+                                        "agent_id": agent.profile.id,
+                                        "agent_name": agent.profile.name,
+                                        "specialization": agent.specialization.value,
+                                        "generation": agent.profile.dna.generation,
+                                    },
+                                    source="agent_factory",
+                                )
+
+                # 4. Check if any agents should evolve (reproduce/mutate)
+                await self._check_agent_evolution()
+
+                # 5. Log heartbeat
+                if self._agents_spawned > 0:
+                    logger.debug(
+                        "factory.heartbeat",
+                        active_agents=sum(
+                            1 for a in self._agent_registry.values()
+                            if a.profile.state != AgentState.RETIRED
+                        ),
+                        total_spawned=self._agents_spawned,
+                        gaps_detected=len(gaps),
+                    )
+
                 await asyncio.sleep(60)
+
             except asyncio.CancelledError:
                 break
+            except Exception as exc:
+                logger.error("factory.monitor_error", error=str(exc))
+                await asyncio.sleep(30)
+
+    def _collect_unassigned_tasks(self) -> list[TaskDefinition]:
+        """Gather all unassigned/open tasks from the task market.
+
+        In production, this would query the task market through the hub.
+        Returns a list of tasks that need agents.
+        """
+        if not self.hub:
+            return []
+        collected: list[TaskDefinition] = []
+        try:
+            # Query the task market for open/unassigned tasks
+            task_market = self.hub.task_market
+            # Collect all tasks that are still open
+            for task_id, status in list(task_market._task_status.items()):
+                from backend.communication.message_types import TaskStatus
+                if status == TaskStatus.OPEN:
+                    task = task_market.get_task(task_id)
+                    if task:
+                        collected.append(task)
+        except Exception as exc:
+            logger.warning("factory.collect_tasks_error", error=str(exc))
+        return collected
+
+    async def _check_agent_evolution(self) -> None:
+        """Monitor agent performance and trigger evolution events.
+
+        - Low-reputation agents get mutated to try new strategies
+        - High-reputation agents get cloned and merged
+        - Retired agents get removed from the registry
+        """
+        if not self.hub:
+            return
+
+        active_agents = [
+            a for a in self._agent_registry.values()
+            if a.profile.state not in (AgentState.RETIRED, AgentState.EVOLVING)
+        ]
+
+        # Too few agents to evolve meaningfully
+        if len(active_agents) < 3:
+            return
+
+        # Find low-reputation agents and mutate them
+        low_performers = [
+            a for a in active_agents if a.profile.reputation < 20.0
+            and a.profile.tasks_completed > 0
+        ]
+        for agent in low_performers[:2]:  # Limit to 2 per cycle
+            agent.mutate_dna(intensity=0.25)  # Stronger mutation for low performers
+            logger.info(
+                "factory.mutating_low_performer",
+                agent=agent.profile.name,
+                reputation=agent.profile.reputation,
+            )
+
+        # Find high-reputation agents and merge them to create evolved children
+        top_performers = sorted(
+            [a for a in active_agents if a.profile.reputation > 70.0],
+            key=lambda a: a.profile.reputation,
+            reverse=True,
+        )
+        if len(top_performers) >= 2:
+            parent_a = top_performers[0]
+            parent_b = top_performers[1]
+
+            # Create evolved child
+            child = self.spawn_evolved_agent(parent_a, parent_b)
+
+            # Boost the child's starting stats
+            child.profile.credits = parent_a.profile.credits * 0.3 + parent_b.profile.credits * 0.3 + 20.0
+            child.profile.reputation = min(100.0, child.profile.reputation + 5.0)
+
+            await child.start(hub=self.hub)
+
+            if self.hub:
+                await self.hub.publish_event(
+                    EventType.AGENT_DNA_MERGED,
+                    payload={
+                        "child_id": child.profile.id,
+                        "child_name": child.profile.name,
+                        "parent_a": parent_a.profile.name,
+                        "parent_b": parent_b.profile.name,
+                        "generation": child.profile.dna.generation,
+                    },
+                    source="agent_factory",
+                )
+
+            logger.info(
+                "factory.evolved_agent_created",
+                child=child.profile.name,
+                parents=[parent_a.profile.name, parent_b.profile.name],
+                generation=child.profile.dna.generation,
+            )
+
+        # Retire agents with very low reputation that have been active
+        stale_agents = [
+            a for a in active_agents
+            if a.profile.reputation < 5.0 and a.profile.tasks_completed > 5
+        ]
+        for agent in stale_agents[:1]:  # Limit to 1 per cycle
+            if self.hub:
+                await self.hub.publish_event(
+                    EventType.AGENT_RETIRED,
+                    payload={
+                        "agent_id": agent.profile.id,
+                        "agent_name": agent.profile.name,
+                        "reason": "low_reputation",
+                    },
+                    source="agent_factory",
+                )
+            agent.profile.state = AgentState.RETIRED
+            self._agents_retired += 1
+            logger.info(
+                "factory.retired_agent",
+                agent=agent.profile.name,
+                reputation=agent.profile.reputation,
+            )
 
     # ── Registry ────────────────────────────────────────────────────────
 
