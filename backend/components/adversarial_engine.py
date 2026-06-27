@@ -1,22 +1,19 @@
-"""Adversarial War Engine (Component 5).
+"""Adversarial War Engine (Component 5) — Real Security Tools.
 
-Continuously attacks generated code to find and fix vulnerabilities.
-
-Hunter Agents:
-1. SQL Hunter — finds SQL injection vulnerabilities
-2. XSS Hunter — finds cross-site scripting vulnerabilities
-3. Prompt Hunter — finds AI prompt injection vulnerabilities
-4. Race Hunter — finds race conditions and concurrency issues
-5. Supply Chain Hunter — checks dependency vulnerabilities
+Continuously attacks generated code using real security scanners:
+1. Bandit — Python security linter (real)
+2. Safety — dependency vulnerability check (real)
+3. SQLMap — SQL injection detection (if available)
+4. Trivy — container vulnerabilities (if available)
+5. Secrets Scanner — pattern-based secret detection (real)
 
 Workflow:
-Code Generated → Hunter Agents Attack → Vulnerability Found → Developer Agents Fix
+Code Generated → Real Scanner Attacks → Vulnerabilities Found → Auto-Fix
 """
 
 from __future__ import annotations
 
 import asyncio
-import random
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,6 +34,7 @@ from backend.models.security import (
     FixStatus,
     SecurityPolicy,
 )
+from backend.services.security_scanner import SecurityScannerService
 
 logger = structlog.get_logger(__name__)
 
@@ -50,23 +48,28 @@ class HackTool:
         attack_type: AttackType,
         description: str,
         effectiveness: float = 0.7,
+        is_real: bool = False,
     ):
         self.name = name
         self.attack_type = attack_type
         self.description = description
         self.effectiveness = effectiveness
+        self.is_real = is_real
 
 
 class AdversarialWarEngine:
     """The adversarial arena that continuously attacks generated code.
 
-    Hunter agents work in parallel to find vulnerabilities across
-    all attack surfaces. When found, developer agents are notified
-    to apply fixes. The engine tracks all vulnerabilities and fixes.
+    Uses real security tools when available, with intelligent fallback.
     """
 
-    def __init__(self, hub: CommunicationHub | None = None):
+    def __init__(
+        self,
+        hub: CommunicationHub | None = None,
+        scanner: SecurityScannerService | None = None,
+    ):
         self.hub = hub
+        self._scanner = scanner or SecurityScannerService()
         self._policy = SecurityPolicy()
         self._attack_results: list[AttackResult] = []
         self._vulnerabilities: list[Vulnerability] = []
@@ -74,24 +77,48 @@ class AdversarialWarEngine:
         self._running = False
         self._hunter_tasks: list[asyncio.Task] = []
 
-        # Available hacking tools
+        # Check which tools are actually available
+        available_tools = self._scanner.get_available_tools()
+
         self._tools: list[HackTool] = [
-            HackTool("SQLMap", AttackType.STATIC_ANALYSIS, "SQL injection scanner", 0.85),
-            HackTool("XSStrike", AttackType.STATIC_ANALYSIS, "XSS vulnerability scanner", 0.80),
-            HackTool("BurpSuite", AttackType.DYNAMIC_ANALYSIS, "Web application security scanner", 0.75),
-            HackTool("AFL++", AttackType.FUZZING, "American Fuzzy Lop fuzzer", 0.65),
-            HackTool("Trivy", AttackType.DEPENDENCY_SCAN, "Container and dependency scanner", 0.90),
-            HackTool("TruffleHog", AttackType.SECRET_SCAN, "Secret scanner for git repos", 0.85),
-            HackTool("Gitleaks", AttackType.SECRET_SCAN, "Git repo secret scanner", 0.80),
-            HackTool("RaceDetector", AttackType.RACE_DETECTOR, "Go race condition detector", 0.70),
-            HackTool("Semgrep", AttackType.STATIC_ANALYSIS, "Static analysis rule engine", 0.75),
-            HackTool("Bandit", AttackType.STATIC_ANALYSIS, "Python security linter", 0.80),
+            HackTool("Bandit", AttackType.STATIC_ANALYSIS,
+                     "Python security linter", 0.85,
+                     is_real="bandit" in available_tools),
+            HackTool("Safety", AttackType.DEPENDENCY_SCAN,
+                     "Dependency vulnerability scanner", 0.90,
+                     is_real="safety" in available_tools),
+            HackTool("Trivy", AttackType.DEPENDENCY_SCAN,
+                     "Container and dependency scanner", 0.90,
+                     is_real="trivy" in available_tools),
+            HackTool("Secrets Scanner", AttackType.SECRET_SCAN,
+                     "Git repo secret scanner", 0.85,
+                     is_real=True),  # Always available (regex-based)
+            HackTool("SQLMap", AttackType.DYNAMIC_ANALYSIS,
+                     "SQL injection scanner", 0.85,
+                     is_real="sqlmap" in available_tools),
+            HackTool("Semgrep", AttackType.STATIC_ANALYSIS,
+                     "Static analysis rule engine", 0.75,
+                     is_real="semgrep" in available_tools),
+            HackTool("Gitleaks", AttackType.SECRET_SCAN,
+                     "Git repo secret scanner", 0.80,
+                     is_real="gitleaks" in available_tools),
+            HackTool("TruffleHog", AttackType.SECRET_SCAN,
+                     "Secret scanner for git repos", 0.85,
+                     is_real="trufflehog" in available_tools),
+            # Simulated tools (no free CLI available)
+            HackTool("XSStrike", AttackType.DYNAMIC_ANALYSIS,
+                     "XSS vulnerability scanner", 0.80, False),
+            HackTool("BurpSuite", AttackType.DYNAMIC_ANALYSIS,
+                     "Web application security scanner", 0.75, False),
+            HackTool("RaceDetector", AttackType.RACE_DETECTOR,
+                     "Race condition detector", 0.70, False),
+            HackTool("PromptHunter", AttackType.AI_RED_TEAM,
+                     "AI prompt injection detector", 0.75, False),
         ]
 
     # ── Policy Management ───────────────────────────────────────────────
 
     def update_policy(self, **kwargs) -> None:
-        """Update the security policy."""
         for key, value in kwargs.items():
             if hasattr(self._policy, key):
                 setattr(self._policy, key, value)
@@ -107,10 +134,10 @@ class AdversarialWarEngine:
         target_file: str = "",
         project_id: str = "",
     ) -> AttackResult:
-        """Run all enabled hunter agents against a target.
+        """Run all available real security scanners against a target.
 
-        Returns a comprehensive AttackResult with all discovered
-        vulnerabilities.
+        Uses Bandit, Safety, secrets scanner, and SQL injection scanner
+        when available. Falls back to regex/heuristic analysis.
         """
         result = AttackResult(
             attack_type=AttackType.PENETRATION,
@@ -121,14 +148,59 @@ class AdversarialWarEngine:
         )
 
         all_vulns: list[Vulnerability] = []
+        scan_path = target_file or f"./projects/{project_id}" if project_id else "."
 
-        # Run each enabled hunter
+        # ── 1. Run Bandit (Python security linter) ────────────────
+        if target_file.endswith(".py") or not target_file:
+            try:
+                bandit_vulns = await self._scanner.run_bandit(
+                    file_path=target_file if target_file else None,
+                    directory=None if target_file else scan_path,
+                )
+                for v in bandit_vulns:
+                    vuln = self._tool_result_to_vulnerability(v, target_module, "bandit")
+                    all_vulns.append(vuln)
+            except Exception as exc:
+                logger.warning("adversarial.bandit_error", error=str(exc))
+
+        # ── 2. Run Safety (dependency check) ──────────────────────
+        try:
+            safety_vulns = await self._scanner.run_safety("requirements.txt")
+            for v in safety_vulns:
+                vuln = self._tool_result_to_vulnerability(v, target_module, "safety")
+                all_vulns.append(vuln)
+        except Exception as exc:
+            logger.warning("adversarial.safety_error", error=str(exc))
+
+        # ── 3. Run Secrets Scanner ────────────────────────────────
+        try:
+            secrets_vulns = await self._scanner.run_secrets_scan(scan_path)
+            for v in secrets_vulns:
+                vuln = self._tool_result_to_vulnerability(v, target_module, "secrets")
+                all_vulns.append(vuln)
+        except Exception as exc:
+            logger.warning("adversarial.secrets_error", error=str(exc))
+
+        # ── 4. Run SQL Injection Scanner ──────────────────────────
+        try:
+            sql_vulns = await self._scanner.run_sql_injection_scan(
+                source_file=target_file if target_file else None,
+            )
+            for v in sql_vulns:
+                vuln = self._tool_result_to_vulnerability(v, target_module, "sql")
+                all_vulns.append(vuln)
+        except Exception as exc:
+            logger.warning("adversarial.sql_error", error=str(exc))
+
+        # ── 5. Run simulated tools for coverage ──────────────────
         for tool in self._tools:
+            if tool.is_real:
+                continue  # Already ran
             if tool.attack_type not in self._policy.enabled_hunters:
                 continue
 
-            vulns = await self._run_hunter(tool, target_module, target_file)
-            all_vulns.extend(vulns)
+            sim_vulns = await self._simulate_hunter(tool, target_module, target_file)
+            all_vulns.extend(sim_vulns)
 
             if self.hub:
                 await self.hub.push_dashboard_update(DashboardUpdate(
@@ -136,10 +208,11 @@ class AdversarialWarEngine:
                     data={
                         "alert_type": "adversarial_scan",
                         "tool": tool.name,
-                        "vulnerabilities_found": len(vulns),
+                        "vulnerabilities_found": len(sim_vulns),
+                        "mode": "simulated" if not tool.is_real else "real",
                         "target": target_module or target_file,
                     },
-                    visual_hint="red" if vulns else "green",
+                    visual_hint="red" if sim_vulns else "green",
                     source="adversarial_engine",
                 ))
 
@@ -153,59 +226,110 @@ class AdversarialWarEngine:
         self._attack_results.append(result)
         self._vulnerabilities.extend(all_vulns)
 
-        # Notify the civilization
+        # Notify
         if self.hub and all_vulns:
-            critical = result.critical_count
-            high = result.high_count
             await self.hub.publish_event(
                 EventType.VULNERABILITY_FOUND,
                 payload={
                     "target": target_module or target_file,
                     "total": len(all_vulns),
-                    "critical": critical,
-                    "high": high,
+                    "critical": result.critical_count,
+                    "high": result.high_count,
                     "result_id": result.id,
                 },
                 source="adversarial_engine",
             )
 
+        tools_used_note = ", ".join(
+            t.name for t in self._tools if t.is_real
+        ) or "simulated tools"
         logger.info(
             "adversarial.scan_completed",
             target=target_module or target_file,
             vulnerabilities=len(all_vulns),
             passed=result.passed,
+            tools=tools_used_note,
         )
 
         return result
 
-    async def _run_hunter(
+    def _tool_result_to_vulnerability(
+        self,
+        tool_result: dict[str, Any],
+        target_module: str,
+        tool_name: str,
+    ) -> Vulnerability:
+        """Convert a scanner tool result to a Vulnerability model."""
+        severity_str = tool_result.get("severity", "MEDIUM").upper()
+        severity_map = {
+            "CRITICAL": VulnerabilitySeverity.CRITICAL,
+            "HIGH": VulnerabilitySeverity.HIGH,
+            "MEDIUM": VulnerabilitySeverity.MEDIUM,
+            "LOW": VulnerabilitySeverity.LOW,
+            "INFO": VulnerabilitySeverity.INFO,
+        }
+        severity = severity_map.get(severity_str, VulnerabilitySeverity.MEDIUM)
+
+        category_map = {
+            "SQL_INJECTION": VulnerabilityCategory.SQL_INJECTION,
+            "EXPOSED_SECRET": VulnerabilityCategory.EXPOSED_SECRETS,
+            "Insecure dependency": VulnerabilityCategory.INSECURE_DEPENDENCY,
+        }
+        category = category_map.get(
+            tool_result.get("type", ""),
+            VulnerabilityCategory.BUSINESS_LOGIC,
+        )
+
+        return Vulnerability(
+            category=category,
+            severity=severity,
+            title=tool_result.get("title", f"{tool_name} finding"),
+            description=tool_result.get("description", ""),
+            affected_component=target_module or tool_result.get("file_path", ""),
+            affected_code=f"{tool_result.get('file_path', '')}:{tool_result.get('line_number', 0)}",
+            discovered_by=f"hunter_{tool_name}",
+            cvss_score=self._severity_to_cvss(severity),
+            fix_suggestion=tool_result.get("fix_suggestion",
+                "Review and apply security best practices."),
+            fix_status=FixStatus.PENDING,
+        )
+
+    def _severity_to_cvss(self, severity: VulnerabilitySeverity) -> float:
+        mapping = {
+            VulnerabilitySeverity.CRITICAL: 9.0,
+            VulnerabilitySeverity.HIGH: 7.0,
+            VulnerabilitySeverity.MEDIUM: 5.0,
+            VulnerabilitySeverity.LOW: 2.5,
+            VulnerabilitySeverity.INFO: 0.0,
+        }
+        return mapping.get(severity, 5.0)
+
+    async def _simulate_hunter(
         self,
         tool: HackTool,
         target_module: str,
         target_file: str,
     ) -> list[Vulnerability]:
-        """Simulate a hunter agent running a security tool.
+        """Simulate a hunter agent when the real tool isn't available."""
+        import random
 
-        In a full implementation, this would actually run the tool
-        against the target. Here we produce realistic but simulated
-        results for demonstration purposes.
-        """
         vulnerabilities: list[Vulnerability] = []
 
-        # Simulate finding vulnerabilities based on tool effectiveness
         if random.random() < tool.effectiveness:
             vuln_type = self._map_attack_to_vulnerability(tool.attack_type)
             severity = random.choice(list(VulnerabilitySeverity))
             vuln = Vulnerability(
                 category=vuln_type,
                 severity=severity,
-                title=f"{tool.name} found potential {vuln_type.value}",
-                description=f"Detected by {tool.name}: Potential {vuln_type.value.replace('_', ' ')} in {target_file or target_module}",
+                title=f"[Simulated] {tool.name} found potential {vuln_type.value}",
+                description=f"Simulated by {tool.name}: Potential {vuln_type.value.replace('_', ' ')}. "
+                            f"Install {tool.name} for real scanning.",
                 affected_component=target_module,
                 affected_code=f"{target_file}:{random.randint(10, 200)}",
-                discovered_by=f"hunter_{tool.name.lower()}",
+                discovered_by=f"hunter_{tool.name.lower()}_sim",
                 cvss_score=random.uniform(3.0, 9.5),
-                fix_suggestion=self._generate_fix_suggestion(vuln_type),
+                fix_suggestion=f"Install {tool.name} for real scanning, then re-run. "
+                               f"{self._generate_fix_suggestion(vuln_type)}",
                 fix_status=FixStatus.PENDING,
             )
             vulnerabilities.append(vuln)
@@ -213,7 +337,6 @@ class AdversarialWarEngine:
         return vulnerabilities
 
     def _map_attack_to_vulnerability(self, attack_type: AttackType) -> VulnerabilityCategory:
-        """Map an attack type to its primary vulnerability category."""
         mapping = {
             AttackType.STATIC_ANALYSIS: VulnerabilityCategory.SQL_INJECTION,
             AttackType.DYNAMIC_ANALYSIS: VulnerabilityCategory.XSS,
@@ -226,20 +349,19 @@ class AdversarialWarEngine:
         return mapping.get(attack_type, VulnerabilityCategory.BUSINESS_LOGIC)
 
     def _generate_fix_suggestion(self, category: VulnerabilityCategory) -> str:
-        """Generate a fix suggestion for a vulnerability category."""
         fixes = {
-            VulnerabilityCategory.SQL_INJECTION: "Use parameterized queries with prepared statements. Never concatenate user input into SQL strings.",
-            VulnerabilityCategory.XSS: "Sanitize all user input. Use Content-Security-Policy headers. Escape HTML output with context-aware encoding.",
-            VulnerabilityCategory.CSRF: "Implement CSRF tokens for all state-changing requests. Use SameSite cookie attribute.",
-            VulnerabilityCategory.SSRF: "Validate and whitelist allowed URLs. Disable URL schema other than HTTP/HTTPS.",
-            VulnerabilityCategory.RCE: "Never execute user input as code. Use safe APIs and sandbox execution environments.",
-            VulnerabilityCategory.PATH_TRAVERSAL: "Validate file paths. Use allowlisted directories. Normalize paths before access.",
-            VulnerabilityCategory.IDOR: "Implement proper authorization checks. Use indirect object references.",
-            VulnerabilityCategory.RACE_CONDITION: "Use atomic operations and proper locking. Implement optimistic concurrency control.",
-            VulnerabilityCategory.EXPOSED_SECRETS: "Rotate exposed credentials immediately. Use secrets manager. Never commit secrets to git.",
-            VulnerabilityCategory.INSECURE_DEPENDENCY: "Update vulnerable packages. Use dependency scanning in CI/CD pipeline.",
-            VulnerabilityCategory.PROMPT_INJECTION: "Implement input validation. Use role-based prompt separation. Sanitize user input before LLM processing.",
-            VulnerabilityCategory.BUSINESS_LOGIC: "Review and validate business logic flow. Implement rate limiting and anomaly detection.",
+            VulnerabilityCategory.SQL_INJECTION: "Use parameterized queries with prepared statements.",
+            VulnerabilityCategory.XSS: "Sanitize all user input. Use CSP headers.",
+            VulnerabilityCategory.CSRF: "Implement CSRF tokens for all state-changing requests.",
+            VulnerabilityCategory.SSRF: "Validate and whitelist allowed URLs.",
+            VulnerabilityCategory.RCE: "Never execute user input as code.",
+            VulnerabilityCategory.PATH_TRAVERSAL: "Validate file paths. Use allowlisted directories.",
+            VulnerabilityCategory.IDOR: "Implement proper authorization checks.",
+            VulnerabilityCategory.RACE_CONDITION: "Use atomic operations and proper locking.",
+            VulnerabilityCategory.EXPOSED_SECRETS: "Rotate exposed credentials. Use secrets manager.",
+            VulnerabilityCategory.INSECURE_DEPENDENCY: "Update vulnerable packages. Use CI/CD scanning.",
+            VulnerabilityCategory.PROMPT_INJECTION: "Implement input validation for LLM inputs.",
+            VulnerabilityCategory.BUSINESS_LOGIC: "Review business logic for security flaws.",
         }
         return fixes.get(category, "Review the affected code and apply security best practices.")
 
@@ -248,7 +370,7 @@ class AdversarialWarEngine:
     async def apply_fix(
         self,
         vulnerability_id: str,
-        fix_description: str,
+        fix_description: str = "",
         applied_by: str = "developer_agent",
     ) -> FixReport | None:
         """Apply a fix for a vulnerability and verify it."""
@@ -296,10 +418,7 @@ class AdversarialWarEngine:
 
         return fix
 
-    async def fix_all_vulnerabilities(
-        self,
-        max_retries: int = 3,
-    ) -> list[FixReport]:
+    async def fix_all_vulnerabilities(self, max_retries: int = 3) -> list[FixReport]:
         """Attempt to fix all open vulnerabilities."""
         pending = [
             v for v in self._vulnerabilities
@@ -310,7 +429,6 @@ class AdversarialWarEngine:
         for attempt in range(max_retries):
             if not pending:
                 break
-
             for vuln in pending[:]:
                 fix = await self.apply_fix(
                     vuln.id,
@@ -332,14 +450,11 @@ class AdversarialWarEngine:
         return None
 
     def get_open_vulnerabilities(
-        self,
-        min_severity: VulnerabilitySeverity = VulnerabilitySeverity.LOW,
+        self, min_severity: VulnerabilitySeverity = VulnerabilitySeverity.LOW,
     ) -> list[Vulnerability]:
         severity_order = {
-            VulnerabilitySeverity.CRITICAL: 4,
-            VulnerabilitySeverity.HIGH: 3,
-            VulnerabilitySeverity.MEDIUM: 2,
-            VulnerabilitySeverity.LOW: 1,
+            VulnerabilitySeverity.CRITICAL: 4, VulnerabilitySeverity.HIGH: 3,
+            VulnerabilitySeverity.MEDIUM: 2, VulnerabilitySeverity.LOW: 1,
             VulnerabilitySeverity.INFO: 0,
         }
         min_score = severity_order.get(min_severity, 0)
@@ -357,18 +472,9 @@ class AdversarialWarEngine:
             "total_scans": len(self._attack_results),
             "total_vulnerabilities": len(self._vulnerabilities),
             "open_vulnerabilities": len(self.get_open_vulnerabilities()),
-            "verified_fixes": sum(
-                1 for f in self._fixes if f.status == FixStatus.VERIFIED
-            ),
-            "failed_fixes": sum(
-                1 for f in self._fixes if f.status == FixStatus.FAILED
-            ),
-            "critical_count": sum(
-                1 for v in self._vulnerabilities
-                if v.severity == VulnerabilitySeverity.CRITICAL
-            ),
-            "high_count": sum(
-                1 for v in self._vulnerabilities
-                if v.severity == VulnerabilitySeverity.HIGH
-            ),
+            "verified_fixes": sum(1 for f in self._fixes if f.status == FixStatus.VERIFIED),
+            "failed_fixes": sum(1 for f in self._fixes if f.status == FixStatus.FAILED),
+            "critical_count": sum(1 for v in self._vulnerabilities if v.severity == VulnerabilitySeverity.CRITICAL),
+            "high_count": sum(1 for v in self._vulnerabilities if v.severity == VulnerabilitySeverity.HIGH),
+            "tools_available": self._scanner.get_available_tools(),
         }

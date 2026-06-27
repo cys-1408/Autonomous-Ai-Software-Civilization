@@ -1,17 +1,14 @@
-"""Goal Interpreter (Component 1).
+"""Goal Interpreter (Component 1) — LLM-Powered.
 
 Converts free-form user requests into machine-understandable project
-specifications.
+specifications using a real LLM (OpenAI/Claude). Falls back to
+rule-based NLP heuristics if no API key is configured.
 
 Example:
-    Input: "Build a Hospital Management System"
+    Input: "Build a Hospital Management System with patient records,
+            doctor scheduling, online billing, and pharmacy management"
     Output: Structured ProjectSpec with detected modules,
             requirements, constraints, and technology recommendations.
-
-The interpreter uses:
-- NLP pattern matching for module detection
-- Heuristic analysis for constraint extraction
-- Tech stack recommendation engine
 """
 
 from __future__ import annotations
@@ -36,6 +33,7 @@ from backend.models.project import (
     Constraint,
     TechStack,
 )
+from backend.services.llm_service import LLMService
 
 logger = structlog.get_logger(__name__)
 
@@ -91,27 +89,25 @@ PROJECT_MODULES: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
-SECURITY_KEYWORDS = [
-    r"\b(hipaa|gdpr|pci|sox|pii|encryption|audit)\b",
-]
-SCALABILITY_KEYWORDS = [
-    r"\b(million|high.?traffic|scale|load|concurrent|caching|cdn)\b",
-]
-PERFORMANCE_KEYWORDS = [
-    r"\b(performance|latency|realtime|fast|quick|millisecond)\b",
-]
-
 
 class GoalInterpreter:
     """Interprets user goals into structured project specifications.
+
+    Uses a real LLM (OpenAI/Claude) when available via LangChain.
+    Falls back to comprehensive NLP heuristics when no API key is set.
 
     This is the entry point for the entire civilization — it converts
     "Build a Hospital Management System" into a machine-readable spec
     that drives all downstream agents.
     """
 
-    def __init__(self, hub: CommunicationHub | None = None):
+    def __init__(
+        self,
+        hub: CommunicationHub | None = None,
+        llm_service: LLMService | None = None,
+    ):
         self.hub = hub
+        self._llm = llm_service or LLMService()
 
     async def interpret(
         self,
@@ -119,6 +115,9 @@ class GoalInterpreter:
         user_id: str = "anonymous",
     ) -> ProjectSpec:
         """Convert a natural language request into a ProjectSpec.
+
+        Uses LLM when available for rich understanding, falls back
+        to rule-based NLP heuristics.
 
         Args:
             raw_input: The user's request (e.g., "Build a Hospital Management System")
@@ -132,25 +131,103 @@ class GoalInterpreter:
         logger.info(
             "interpreter.parsing_goal",
             raw_input=raw_input[:100],
+            llm_available=self._llm.is_available,
         )
 
-        # Detect project type
+        # Try LLM first — if initialized, it was configured
+        if self._llm.is_available:
+            llm_result = await self._llm.interpret_goal(raw_input)
+            spec = self._llm_result_to_spec(goal, llm_result, raw_input)
+
+            if spec:
+                if self.hub:
+                    await self._notify_civilization(spec)
+                return spec
+
+        # Fallback to rule-based interpretation
+        logger.info("interpreter.using_fallback", reason="LLM unavailable or returned invalid result")
+        spec = self._rule_based_interpret(goal, raw_input)
+
+        if self.hub:
+            await self._notify_civilization(spec)
+
+        logger.info(
+            "interpreter.goal_parsed",
+            project_type=spec.project_type,
+            modules=spec.module_count,
+            complexity=spec.estimated_complexity,
+        )
+
+        return spec
+
+    def _llm_result_to_spec(
+        self,
+        goal: ProjectGoal,
+        llm_result: dict[str, Any],
+        raw_input: str,
+    ) -> ProjectSpec | None:
+        """Convert LLM JSON output to a ProjectSpec."""
+        try:
+            modules_data = llm_result.get("modules", [])
+            if not modules_data:
+                return None
+
+            modules = [
+                Module(
+                    name=m.get("name", "Module"),
+                    entities=m.get("entities", []),
+                    priority=m.get("priority", 5),
+                )
+                for m in modules_data
+            ]
+
+            constraints_data = llm_result.get("constraints", [])
+            constraints = [
+                Constraint(
+                    category=c.get("category", "general"),
+                    description=c.get("description", ""),
+                    priority=c.get("priority", "should"),
+                )
+                for c in constraints_data
+            ]
+
+            ts = llm_result.get("tech_stack", {})
+            tech_stack = TechStack(
+                language=ts.get("language", "python"),
+                framework=ts.get("framework", "fastapi"),
+                database=ts.get("database", "postgresql"),
+                cache=ts.get("cache"),
+            )
+            if ts.get("additional"):
+                tech_stack.additional = ts["additional"]
+
+            return ProjectSpec(
+                goal_id=goal.id,
+                project_type=llm_result.get("project_type", "general"),
+                title=llm_result.get("title", self._generate_title(raw_input, "general")),
+                description=raw_input,
+                modules=modules,
+                constraints=constraints,
+                tech_stack=tech_stack,
+                status=ProjectStatus.INTERPRETED,
+            )
+
+        except Exception as exc:
+            logger.error("interpreter.llm_result_parse_error", error=str(exc))
+            return None
+
+    def _rule_based_interpret(
+        self,
+        goal: ProjectGoal,
+        raw_input: str,
+    ) -> ProjectSpec:
+        """Fallback rule-based interpretation."""
         project_type = self._detect_project_type(raw_input)
-
-        # Extract module definitions from domain knowledge
         modules = self._build_modules(project_type, raw_input)
-
-        # Detect constraints
         constraints = self._detect_constraints(raw_input)
-
-        # Recommend tech stack
         tech_stack = self._recommend_tech_stack(project_type, constraints)
 
-        # Extract security and scalability requirements
-        security_reqs = self._extract_security_requirements(raw_input)
-        scalability_reqs = self._extract_scalability_requirements(raw_input)
-
-        spec = ProjectSpec(
+        return ProjectSpec(
             goal_id=goal.id,
             project_type=project_type,
             title=self._generate_title(raw_input, project_type),
@@ -161,51 +238,41 @@ class GoalInterpreter:
             status=ProjectStatus.INTERPRETED,
         )
 
-        if security_reqs:
-            spec.security_requirements = security_reqs
-        if scalability_reqs:
-            spec.scalability_requirements = scalability_reqs
+    async def _notify_civilization(self, spec: ProjectSpec) -> None:
+        """Notify civilization about the new project."""
+        if not self.hub:
+            return
 
-        # Notify the civilization
-        if self.hub:
-            await self.hub.publish_event(
-                EventType.PROJECT_CREATED,
-                payload={
-                    "project_id": spec.id,
-                    "project_type": project_type,
-                    "module_count": len(modules),
-                    "constraint_count": len(constraints),
-                    "estimated_complexity": spec.estimated_complexity,
-                },
-                source="goal_interpreter",
-            )
-
-            await self.hub.push_dashboard_update(DashboardUpdate(
-                update_type="project_created",
-                data={
-                    "project_id": spec.id,
-                    "title": spec.title,
-                    "type": project_type,
-                    "modules": [m.name for m in modules],
-                },
-                visual_hint="blue",
-                source="goal_interpreter",
-            ))
-
-        logger.info(
-            "interpreter.goal_parsed",
-            project_type=project_type,
-            modules=spec.module_count,
-            complexity=spec.estimated_complexity,
+        await self.hub.publish_event(
+            EventType.PROJECT_CREATED,
+            payload={
+                "project_id": spec.id,
+                "project_type": spec.project_type,
+                "module_count": len(spec.modules),
+                "constraint_count": len(spec.constraints),
+                "estimated_complexity": spec.estimated_complexity,
+            },
+            source="goal_interpreter",
         )
 
-        return spec
+        await self.hub.push_dashboard_update(DashboardUpdate(
+            update_type="project_created",
+            data={
+                "project_id": spec.id,
+                "title": spec.title,
+                "type": spec.project_type,
+                "modules": [m.name for m in spec.modules],
+            },
+            visual_hint="blue",
+            source="goal_interpreter",
+        ))
+
+    # ── Rule-Based Detection Methods ────────────────────────────────
 
     def _detect_project_type(self, raw_input: str) -> str:
         """Detect the domain/project type from the text."""
         text_lower = raw_input.lower()
 
-        # Direct type keywords
         type_patterns = {
             "hospital": r"\b(hospital|medical|clinic|healthcare|patient|doctor)\b",
             "ecommerce": r"\b(ecommerce|shop|store|retail|marketplace|product|catalog)\b",
@@ -230,20 +297,11 @@ class GoalInterpreter:
 
         return best_type
 
-    def _build_modules(
-        self,
-        project_type: str,
-        raw_input: str,
-    ) -> list[Module]:
+    def _build_modules(self, project_type: str, raw_input: str) -> list[Module]:
         """Build module list from domain knowledge and user input."""
         base_modules = PROJECT_MODULES.get(project_type, [])
-
-        # If user mentioned specific features, try to extract them
-        user_mentioned = self._extract_user_mentions(raw_input)
         modules: list[Module] = []
-        added_names: set[str] = set()
 
-        # Add base modules
         for mod_data in base_modules:
             module = Module(
                 name=mod_data["name"],
@@ -251,26 +309,10 @@ class GoalInterpreter:
                 priority=mod_data["priority"],
             )
             modules.append(module)
-            added_names.add(mod_data["name"].lower())
-
-        # Add user-mentioned modules that aren't in base
-        for mention in user_mentioned:
-            if mention.lower() not in added_names:
-                modules.append(
-                    Module(
-                        name=mention,
-                        entities=[mention.replace(" ", "")],
-                        priority=5,
-                    )
-                )
 
         if not modules:
             modules.append(
-                Module(
-                    name="Core",
-                    entities=["Entity"],
-                    priority=5,
-                )
+                Module(name="Core", entities=["Entity"], priority=5)
             )
 
         return modules
@@ -286,11 +328,8 @@ class GoalInterpreter:
             ("performance", r"\b(fast|performance|latency|realtime)\b", "should"),
             ("mobile", r"\b(mobile|ios|android|responsive)\b", "should"),
             ("cloud", r"\b(cloud|aws|azure|gcp|kubernetes)\b", "could"),
-            ("offline", r"\b(offline|off.?line|disconnected)\b", "could"),
-            ("multi-language", r"\b(i18n|localization|multi.?language|translation)\b", "could"),
             ("compliance", r"\b(hipaa|gdpr|pci|sox|compliance|regulatory)\b", "must"),
             ("high-availability", r"\b(ha|high.?availability|fault.?tolerant|redundant)\b", "must"),
-            ("analytics", r"\b(analytics|dashboard|report|visualization)\b", "could"),
         ]
 
         for cat, pattern, priority in constraint_patterns:
@@ -305,86 +344,32 @@ class GoalInterpreter:
 
         return constraints
 
-    def _recommend_tech_stack(
-        self,
-        project_type: str,
-        constraints: list[Constraint],
-    ) -> TechStack:
+    def _recommend_tech_stack(self, project_type: str, constraints: list[Constraint]) -> TechStack:
         """Recommend a technology stack based on project type and constraints."""
-        is_real_time = any(c.category == "performance" for c in constraints)
-        needs_auth = any(c.category == "security" for c in constraints)
-        needs_mobile = any(c.category == "mobile" for c in constraints)
-
         stack = TechStack()
 
         if project_type in ("fintech", "healthcare"):
             stack.language = "python"
             stack.framework = "fastapi"
             stack.database = "postgresql"
-            stack.testing = "pytest"
         elif project_type in ("social", "realtime"):
             stack.language = "typescript"
             stack.framework = "nestjs"
             stack.database = "postgresql"
             stack.cache = "redis"
-            if is_real_time:
-                stack.additional["websocket"] = "socket.io"
         elif project_type == "game":
             stack.language = "go"
             stack.framework = "fiber"
             stack.database = "postgresql"
             stack.cache = "redis"
 
-        if needs_auth:
-            stack.additional["auth"] = "auth0"
-
         return stack
-
-    def _extract_security_requirements(self, raw_input: str) -> list[str]:
-        """Extract security requirements from the input."""
-        text_lower = raw_input.lower()
-        reqs = []
-        for pattern in SECURITY_KEYWORDS:
-            if re.search(pattern, text_lower):
-                keyword = re.search(pattern, text_lower)
-                if keyword:
-                    reqs.append(f"Compliance with {keyword.group(0).upper()} required")
-        if not reqs:
-            reqs.append("Standard security best practices (authentication, authorization, encryption)")
-        return reqs
-
-    def _extract_scalability_requirements(self, raw_input: str) -> list[str]:
-        """Extract scalability requirements."""
-        text_lower = raw_input.lower()
-        reqs = []
-        for pattern in SCALABILITY_KEYWORDS:
-            if re.search(pattern, text_lower):
-                keyword = re.search(pattern, text_lower)
-                if keyword:
-                    reqs.append(f"Scalable for {keyword.group(0)}")
-        if not reqs:
-            reqs.append("Basic scalability (horizontal scaling support)")
-        return reqs
-
-    def _extract_user_mentions(self, raw_input: str) -> list[str]:
-        """Extract specific user-mentioned features."""
-        text_lower = raw_input.lower()
-        mentions = []
-
-        # Look for capitalized phrases that might be feature names
-        phrases = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b", raw_input)
-        for phrase in phrases:
-            if phrase.lower() not in ("a", "an", "the", "system", "build", "create"):
-                mentions.append(phrase)
-
-        return mentions[:5]  # Limit to 5
 
     @staticmethod
     def _generate_title(raw_input: str, project_type: str) -> str:
         """Generate a clean title from the raw input."""
-        # Try to extract a title from the input
         title_match = re.search(
-            r"(?:build|create|make|develop)\s+(?:a|an|the)?\s*(.+)",
+            r"(?:build|create|make|develop)\s+(?:a|an|the)?\s*(.+?)(?:\.|$)",
             raw_input,
             re.IGNORECASE,
         )
@@ -393,7 +378,6 @@ class GoalInterpreter:
             if title:
                 return title
 
-        # Fallback to project type name
         type_names = {
             "hospital": "Hospital Management System",
             "ecommerce": "E-Commerce Platform",
