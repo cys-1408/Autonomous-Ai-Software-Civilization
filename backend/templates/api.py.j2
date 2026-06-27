@@ -11,7 +11,6 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Path, status
 
-from ....models.agent import BaseAgent
 from .schemas import (
     {{ entity }}Create,
     {{ entity }}Update,
@@ -153,7 +152,7 @@ async def get_{{ entity_lower }}(
             if not instance or not instance.is_active:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"{{ entity }} with id {{{ entity_lower }}_id} not found",
+                    detail=f"{{ entity }} with id {{ '{' }}{{ entity_lower }}_id{{ '}' }} not found",
                 )
             return {{ entity }}Response(**instance.to_dict())
     except HTTPException:
@@ -182,7 +181,7 @@ async def update_{{ entity_lower }}(
             if not instance:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"{{ entity }} with id {{{ entity_lower }}_id} not found",
+                    detail=f"{{ entity }} with id {{ '{' }}{{ entity_lower }}_id{{ '}' }} not found",
                 )
 
             return {{ entity }}Response(**instance.to_dict())
@@ -208,7 +207,7 @@ async def delete_{{ entity_lower }}(
             if not deleted:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"{{ entity }} with id {{{ entity_lower }}_id} not found",
+                    detail=f"{{ entity }} with id {{ '{' }}{{ entity_lower }}_id{{ '}' }} not found",
                 )
     except HTTPException:
         raise
@@ -235,8 +234,8 @@ async def search_{{ entity_lower }}s(
                 select({{ entity }}Model)
                 .where(
                     or_(
-                        {{ entity }}Model.name.ilike(f"%{{q}}%"),
-                        {{ entity }}Model.description.ilike(f"%{{q}}%"),
+                        {{ entity }}Model.name.ilike(f"%{{ '{' }}q{{ '}' }}%"),
+                        {{ entity }}Model.description.ilike(f"%{{ '{' }}q{{ '}' }}%"),
                     )
                 )
                 .where({{ entity }}Model.is_active == True)
@@ -253,8 +252,8 @@ async def search_{{ entity_lower }}s(
                 .select_from({{ entity }}Model)
                 .where(
                     or_(
-                        {{ entity }}Model.name.ilike(f"%{{q}}%"),
-                        {{ entity }}Model.description.ilike(f"%{{q}}%"),
+                        {{ entity }}Model.name.ilike(f"%{{ '{' }}q{{ '}' }}%"),
+                        {{ entity }}Model.description.ilike(f"%{{ '{' }}q{{ '}' }}%"),
                     )
                 )
                 .where({{ entity }}Model.is_active == True)

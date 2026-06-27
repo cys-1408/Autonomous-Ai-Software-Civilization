@@ -101,7 +101,7 @@ class Test{{ entity }}API:
         # Verify routes are registered
         routes = [r.path for r in router.routes]
         assert "/" in routes
-        assert "/{{{ entity_lower }}_id}" in routes
+        assert "/{{ '{' }}{{ entity_lower }}_id{{ '}' }}" in routes
 
     @pytest.mark.asyncio
     async def test_create_{{ entity_lower }}_validates_input(self):
